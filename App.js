@@ -1,14 +1,14 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
-  Button,
   Image,
-  ActivityIndicator,
   Alert,
   FlatList,
   Text,
   StyleSheet,
   TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import axios from "axios";
@@ -17,18 +17,50 @@ const CloudinaryUpload = () => {
   const [image, setImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadedImages, setUploadedImages] = useState([]);
+  const [refreshing, setRefreshing] = useState(false);
 
   const CLOUD_NAME = "ds0ut36n6";
   const CLOUDINARY_URL = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload/`;
   const DELETE_URL = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/resources/image/upload`;
+  const LIST_URL = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/resources/image`;
   const API_KEY = "746615598258958";
-  const API_SECRET = "ocFth439b6Me118FU51Owk7bV4g1";
+  const API_SECRET = "ocFth439b6Me118FU51Owk7bV4g";
 
-  // Função para selecionar uma imagem
+  const api = axios.create({
+    headers: {
+      Authorization: `Basic ${btoa(`${API_KEY}:${API_SECRET}`)}`,
+    },
+  });
+
+  const fetchImages = async () => {
+    try {
+      const { data } = await api.get(LIST_URL);
+      
+      const processedImages = (data.resources || []).map(resource => ({
+        ...resource,
+        url: resource.secure_url || `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/${resource.public_id}`
+      }));
+      setUploadedImages(processedImages);
+    } catch (error) {
+      console.error("Erro ao buscar imagens:", error);
+      Alert.alert(
+        "Erro", 
+        error.response?.data?.error?.message || "Ocorreu um erro ao carregar as imagens. Tente novamente."
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const onRefresh = React.useCallback(() => {
+    setRefreshing(true);
+    fetchImages();
+  }, []);
+
   const pickImage = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) {
-      alert("Permission to access gallery is required!");
+      Alert.alert("Permissão Necessária", "É necessário permitir o acesso à galeria para selecionar imagens.");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -42,108 +74,163 @@ const CloudinaryUpload = () => {
     }
   };
 
-  // Função para fazer o upload da imagem
   const uploadImage = async () => {
     if (!image) {
-      Alert.alert("Please select an image first");
+      Alert.alert("Atenção", "Por favor, selecione uma imagem primeiro.");
       return;
     }
     setUploading(true);
-    const data = new FormData();
-    data.append("file", { uri: image.uri, type: "image/jpeg", name: "upload.jpg" });
-    data.append("upload_preset", "storage-atv4");
-    data.append("folder", "storage-atv4");
+
+    const formData = new FormData();
+    formData.append("file", { 
+      uri: image.uri, 
+      type: "image/jpeg", 
+      name: "upload.jpg" 
+    });
+    formData.append("upload_preset", "storage-atv4");
+    formData.append("folder", "storage-atv4");
+
     try {
-      const response = await axios.post(CLOUDINARY_URL, data, {
+      const { data } = await axios.post(CLOUDINARY_URL, formData, {
         headers: {
-          "Content-Type": "multipart/form-data",
+          'Content-Type': 'multipart/form-data',
         },
       });
-      const uploadedImage = response.data;
-      setUploadedImages((prevImages) => [
-        ...prevImages,
-        { url: uploadedImage.secure_url, public_id: uploadedImage.public_id },
-      ]);
-      Alert.alert("Upload successful!", `URL: ${uploadedImage.secure_url}`);
+
+      Alert.alert("Sucesso", "Imagem enviada com sucesso!");
+      setImage(null);
+      fetchImages();
     } catch (error) {
-      console.error("Error uploading image:", error);
-      Alert.alert("Upload failed", "Please try again");
+      console.error("Erro ao enviar imagem:", error);
+      Alert.alert(
+        "Falha no Upload", 
+        error.response?.data?.error?.message || "Não foi possível enviar a imagem. Tente novamente."
+      );
     } finally {
       setUploading(false);
     }
   };
 
-  // Função para excluir imagem
   const deleteImage = async (public_id) => {
-    const authHeader = `Basic ${btoa(`${API_KEY}:${API_SECRET}`)}`;
     try {
-      const response = await axios.delete(DELETE_URL, {
-        headers: {
-          Authorization: authHeader,
-          "Content-Type": "application/json",
-        },
+      const { data } = await api.delete(DELETE_URL, {
         data: {
           public_ids: [public_id],
         },
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
 
-      console.log(response.data);
-
-      if (response.data.error) {
-        alert(response.data.error.message);
-      } else {
-        alert("Image deleted successfully!");
-        setUploadedImages((prevImages) =>
-          prevImages.filter((img) => img.public_id !== public_id)
-        );
-      }
+      Alert.alert("Sucesso", "Imagem excluída com sucesso!");
+      fetchImages();
     } catch (error) {
-      console.error("Error deleting image:", error);
-      Alert.alert("Error deleting image. Please try again.");
+      console.error("Erro ao excluir imagem:", error);
+      Alert.alert(
+        "Erro ao Excluir", 
+        error.response?.data?.error?.message || "Não foi possível excluir a imagem. Tente novamente."
+      );
     }
   };
 
+  useEffect(() => {
+    fetchImages();
+  }, []);
+
+  const renderImageItem = ({ item }) => (
+    <View style={styles.imageItem}>
+      <View style={styles.imageContainer}>
+        <Image 
+          source={{ uri: item.url }} 
+          style={styles.uploadedImage}
+          resizeMode="cover"
+        />
+      </View>
+      <TouchableOpacity
+        style={styles.deleteButton}
+        onPress={() => {
+          Alert.alert(
+            "Confirmar Exclusão",
+            "Tem certeza que deseja excluir esta imagem?",
+            [
+              {
+                text: "Cancelar",
+                style: "cancel"
+              },
+              {
+                text: "Excluir",
+                onPress: () => deleteImage(item.public_id),
+                style: "destructive"
+              }
+            ]
+          );
+        }}
+      >
+        <Text style={styles.deleteButtonText}>Excluir</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Cloudinary Image Upload</Text>
+      <Text style={styles.header}>Gerenciador de Imagens</Text>
 
-      {image && (
-        <Image source={{ uri: image.uri }} style={styles.previewImage} />
-      )}
-      <TouchableOpacity style={styles.button} onPress={pickImage}>
-        <Text style={styles.buttonText}>Pick an Image</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.button, uploading && styles.buttonDisabled]}
-        onPress={uploadImage}
-        disabled={uploading}
-      >
-        <Text style={styles.buttonText}>Upload Image</Text>
-      </TouchableOpacity>
-      {uploading && <ActivityIndicator size="large" color="#0000ff" />}
-      {uploadedImages.length > 0 && (
-        <View style={styles.uploadedImagesContainer}>
-          <Text style={styles.subHeader}>Uploaded Images</Text>
-          <FlatList
-            data={uploadedImages}
-            keyExtractor={(item) => item.public_id}
-            renderItem={({ item }) => (
-              <View style={styles.imageItem}>
-                <Image
-                  source={{ uri: item.url }}
-                  style={styles.uploadedImage}
-                />
-                <TouchableOpacity
-                  style={styles.deleteButton}
-                  onPress={() => deleteImage(item.public_id)}
-                >
-                  <Text style={styles.deleteButtonText}>Delete</Text>
-                </TouchableOpacity>
-              </View>
+      <View style={styles.uploadSection}>
+        {image && (
+          <View style={styles.previewContainer}>
+            <Image 
+              source={{ uri: image.uri }} 
+              style={styles.previewImage}
+              resizeMode="cover"
+            />
+          </View>
+        )}
+
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity 
+            style={[styles.button, styles.pickButton]} 
+            onPress={pickImage}
+          >
+            <Text style={styles.buttonText}>Selecionar Imagem</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.button, 
+              styles.uploadButton,
+              (uploading || !image) && styles.buttonDisabled
+            ]}
+            onPress={uploadImage}
+            disabled={uploading || !image}
+          >
+            {uploading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>Enviar Imagem</Text>
             )}
-          />
+          </TouchableOpacity>
         </View>
-      )}
+      </View>
+
+      <FlatList
+        data={uploadedImages}
+        keyExtractor={(item) => item.public_id}
+        renderItem={renderImageItem}
+        contentContainerStyle={styles.imageList}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh}
+            tintColor="#4A90E2"
+            title="Atualizando..."
+            titleColor="#4A90E2"
+          />
+        }
+        ListEmptyComponent={
+          <Text style={styles.noImagesText}>Nenhuma imagem enviada ainda.</Text>
+        }
+      />
     </View>
   );
 };
@@ -151,79 +238,101 @@ const CloudinaryUpload = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
-    alignItems: "center",
-    backgroundColor: "#f5f5f5",
+    padding: 16,
+    backgroundColor: "#F0F2F5",
   },
   header: {
-    fontSize: 24,
-    fontWeight: "bold",
-    marginBottom: 20,
-    color: "#333",
+    fontSize: 28,
+    fontWeight: "700",
+    marginBottom: 24,
+    color: "#1A1A1A",
+    textAlign: "center",
+  },
+  uploadSection: {
+    marginBottom: 24,
+  },
+  previewContainer: {
+    width: "100%",
+    height: 250,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: "#E1E4E8",
+    marginBottom: 16,
   },
   previewImage: {
-    width: "90%",
-    height: 250,
-    marginBottom: 20,
-    borderRadius: 10,
+    width: "100%",
+    height: "100%",
+  },
+  buttonContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
   },
   button: {
-    backgroundColor: "#007BFF",
-    padding: 15,
-    borderRadius: 5,
+    flex: 1,
+    height: 48,
+    borderRadius: 8,
+    justifyContent: "center",
     alignItems: "center",
-    marginVertical: 10,
-    width: "80%",
-  },
-  buttonText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 16,
-  },
-  buttonDisabled: {
-    backgroundColor: "#A9A9A9",
-  },
-  uploadedImagesContainer: {
-    marginTop: 20,
-    width: "100%",
-  },
-  subHeader: {
-    fontSize: 18,
-    fontWeight: "bold",
-    marginBottom: 10,
-    color: "#555",
-  },
-  imageItem: {
-    flexDirection: "column",
-    alignItems: "center",
-    marginBottom: 20,
-    padding: 10,
-    backgroundColor: "#fff",
-    borderRadius: 10,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 5,
-    elevation: 2,
-    width: "90%",
-    alignSelf: "center",
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  pickButton: {
+    backgroundColor: "#4A90E2",
+  },
+  uploadButton: {
+    backgroundColor: "#34C759",
+  },
+  buttonDisabled: {
+    backgroundColor: "#A8A8A8",
+    opacity: 0.8,
+  },
+  buttonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  imageList: {
+    paddingVertical: 8,
+  },
+  imageItem: {
+    marginBottom: 16,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    overflow: "hidden",
+  },
+  imageContainer: {
+    width: "100%",
+    height: 200,
+    backgroundColor: "#E1E4E8",
   },
   uploadedImage: {
     width: "100%",
-    height: 200,
-    borderRadius: 10,
-    marginBottom: 10,
+    height: "100%",
   },
   deleteButton: {
     backgroundColor: "#FF3B30",
-    padding: 10,
-    borderRadius: 5,
-    width: "80%",
+    padding: 12,
     alignItems: "center",
   },
   deleteButtonText: {
-    color: "#fff",
-    fontWeight: "bold",
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  noImagesText: {
+    textAlign: "center",
+    fontSize: 16,
+    color: "#666666",
+    marginTop: 24,
   },
 });
 
